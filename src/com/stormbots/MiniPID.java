@@ -1,14 +1,21 @@
-package com.stormbots;
+package com.stormbots.closedloop;
+
+import java.util.function.DoubleSupplier;
+
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+
 /**
-* Small, easy to use PID implementation with advanced controller capability.<br> 
-* Minimal usage:<br>
-* MiniPID pid = new MiniPID(p,i,d); <br>
-* ...looping code...{ <br>
-*   output= pid.getOutput(sensorvalue,target); <br>
-* }
-* 
-* @see http://brettbeauregard.com/blog/2011/04/improving-the-beginners-pid-direction/improving-the-beginners-pid-introduction
-*/
+ * Small, easy to use PID implementation with advanced controller
+ * capability.<br>
+ * Minimal usage:<br>
+ * MiniPID pid = new MiniPID(p,i,d); <br>
+ * ...looping code...{ <br>
+ * output= pid.getOutput(sensorvalue,target); <br>
+ * }
+ * 
+ * @see https://github.com/tekdemo/MiniPID-Java
+ * @see http://brettbeauregard.com/blog/2011/04/improving-the-beginners-pid-direction/improving-the-beginners-pid-introduction
+ */
 public class MiniPID{
 	//**********************************
 	// Class private variables
@@ -39,6 +46,18 @@ public class MiniPID{
 	private double outputFilter=0;
 
 	private double setpointRange=0;
+
+	private double continuousMax=0;
+	private double continuousMin=0;
+
+	/** User-defined function for precise modeling of the controlled system
+	 * Note, setpoint and error are constrained by any configuration options provided by the system.
+	 */
+	public interface FeedForwardLambda{
+		public double compute(double setpoint, double actual, double error);
+	}
+	private FeedForwardLambda feedForwardLambda = (s,a,e)->{return 0.0;};
+
 
 	//**********************************
 	// Constructor functions
@@ -82,9 +101,10 @@ public class MiniPID{
 	 *  
 	 * @param p Proportional gain. Affects output according to <b>output+=P*(setpoint-current_value)</b>
 	 */
-	public void setP(double p){
+	public MiniPID setP(double p){
 		P=p;
 		checkSigns();
+		return this;
 	}
 
 	/**
@@ -97,7 +117,7 @@ public class MiniPID{
 	 *
 	 * @param i New gain value for the Integral term
 	 */
-	public void setI(double i){
+	public MiniPID setI(double i){
 		if(I!=0){
 			errorSum=errorSum*I/i;
 			}
@@ -109,7 +129,8 @@ public class MiniPID{
 		 // Implementation note: 
 		 // This Scales the accumulated error to avoid output errors. 
 		 // As an example doubling the I term cuts the accumulated error in half, which results in the 
-		 // output change due to the I term constant during the transition. 
+		 // output change due to the I term constant during the transition.
+		 return this;
 	}
 
 	/**
@@ -127,10 +148,11 @@ public class MiniPID{
 	 *
 	 * @param d New gain value for the Derivative term
 	 */
-	public void setD(double d){
+	public MiniPID setD(double d){
 		D=d;
 		checkSigns();
-		}
+		return this;
+	}
 
 	/**
 	 * Configure the FeedForward parameter. <br>
@@ -141,9 +163,28 @@ public class MiniPID{
 	 * 
 	 * @param f Feed forward gain. 
 	 */
-	public void setF(double f){
+	public MiniPID setF(double f){
 		F=f;
 		checkSigns();
+		return this;
+	}
+
+	/**
+	 * Configure the FeedForward parameter using arbitrary function and system parameters <br>
+	 * This allows for precise modelling of the expected beaviour of your system,
+	 * allowing effective PID use on a wider variety of systems.
+	 * <br>
+	 * Examples:
+	 * <li> For a position system that lifts elevator, the lambda would return a constant value, which 
+	 * represents the motor power necessary to counteract gravity. 
+	 * <li> For a positional system controlling a vertically rotating arm, kPowerAtFullExtension*sin(angle) operation
+	 * to counteract gravity
+	 * @param ff Feed forward lambda, which would take (Setpoint, Sensor Actual, error) and return double
+	 * @return
+	 */
+	public MiniPID setF(FeedForwardLambda ff){
+		this.feedForwardLambda = ff;
+		return this;
 	}
 
 	/** 
@@ -153,12 +194,13 @@ public class MiniPID{
 	 * @param i Integral gain.  Becomes large if setpoint cannot reach target quickly. 
 	 * @param d Derivative gain. Responds quickly to large changes in error. Small values prevents P and I terms from causing overshoot.
 	 */
-	public void setPID(double p, double i, double d){
+	public MiniPID setPID(double p, double i, double d){
 		P=p;D=d;
 		//Note: the I term has additional calculations, so we need to use it's 
 		//specific method for setting it.
 		setI(i);
 		checkSigns();
+		return this;
 	}
 
 	/** 
@@ -169,12 +211,13 @@ public class MiniPID{
 	 * @param d Derivative gain. Responds quickly to large changes in error. Small values prevents P and I terms from causing overshoot.
 	 * @param f Feed-forward gain. Open loop "best guess" for the output should be. Only useful if setpoint represents a rate.
 	 */
-	public void setPID(double p, double i, double d,double f){
+	public MiniPID setPID(double p, double i, double d,double f){
 		P=p;D=d;F=f;
 		//Note: the I term has additional calculations, so we need to use it's 
 		//specific method for setting it.
 		setI(i);
 		checkSigns();
+		return this;
 	}
 
 	/**
@@ -182,7 +225,7 @@ public class MiniPID{
 	 * This can be used to prevent large windup issues and make tuning simpler
 	 * @param maximum. Units are the same as the expected output value
 	 */
-	public void setMaxIOutput(double maximum){
+	public MiniPID setMaxIOutput(double maximum){
 		// Internally maxError and Izone are similar, but scaled for different purposes. 
 		// The maxError is generated for simplifying math, since calculations against 
 		// the max error are far more common than changing the I term or Izone. 
@@ -190,6 +233,7 @@ public class MiniPID{
 		if(I!=0){
 			maxError=maxIOutput/I;
 		}
+		return this;
 	}
 
 	/**
@@ -198,8 +242,9 @@ public class MiniPID{
 	 * <b>[-output, output]</b>
 	 * @param output
 	 */
-	public void setOutputLimits(double output){
+	public MiniPID setOutputLimits(double output){
 		setOutputLimits(-output,output);
+		return this;
 	}
 
 	/**
@@ -209,8 +254,8 @@ public class MiniPID{
 	 * @param minimum possible output value
 	 * @param maximum possible output value
 	 */
-	public void setOutputLimits(double minimum,double maximum){
-		if(maximum<minimum)return;
+	public MiniPID setOutputLimits(double minimum,double maximum){
+		if(maximum<minimum) return this;
 		maxOutput=maximum;
 		minOutput=minimum;
 
@@ -218,14 +263,16 @@ public class MiniPID{
 		if(maxIOutput==0 || maxIOutput>(maximum-minimum) ){
 			setMaxIOutput(maximum-minimum);
 		}
+		return this;
 	}
 
 	/** 
 	 * Set the operating direction of the PID controller
 	 * @param reversed Set true to reverse PID output
 	 */
-	public void  setDirection(boolean reversed){
+	public MiniPID setDirection(boolean reversed){
 		this.reversed=reversed;
+		return this;
 	}
 
 	//**********************************
@@ -239,8 +286,9 @@ public class MiniPID{
 	 * @see MiniPID#getOutput(actual) <br>
 	 * @param setpoint
 	 */
-	public void setSetpoint(double setpoint){
+	public MiniPID setSetpoint(double setpoint){
 		this.setpoint=setpoint;
+		return this;
 	}
 
 	/**
@@ -255,19 +303,30 @@ public class MiniPID{
 		double Ioutput;
 		double Doutput;
 		double Foutput;
+		double continuousHalfRange;
 
 		this.setpoint=setpoint;
-
-		// Ramp the setpoint used for calculations if user has opted to do so
-		if(setpointRange!=0){
-			setpoint=constrain(setpoint,actual-setpointRange,actual+setpointRange);
-		}
 
 		// Do the simple parts of the calculations
 		double error=setpoint-actual;
 
+		// If we're in continous mode, wrap our error to better match the system
+		if(continuousMin != continuousMax){
+			continuousHalfRange = (continuousMax-continuousMin)/2.0;
+			error %= (continuousHalfRange*2);
+			if(error>continuousHalfRange) error-=2*continuousHalfRange;
+			if(error<-continuousHalfRange) error+=2*continuousHalfRange;
+		}
+		
+		// Apply the setpoint range, which effectively constrains our error within a smaller range
+		if (setpointRange != 0) {
+			error = constrain(error,-setpointRange,setpointRange);
+		}
+
 		// Calculate F output. Notice, this depends only on the setpoint, and not the error. 
 		Foutput=F*setpoint;
+		// Handle user-provided functions to model things we can't handle well 
+		Foutput += feedForwardLambda.compute(setpoint, actual, error);
 
 		// Calculate P term
 		Poutput=P*error;   
@@ -369,9 +428,10 @@ public class MiniPID{
 	 * duration, and the controlled portion of the system may have changed due to
 	 * external forces.
 	 */
-	public void reset(){
+	public MiniPID reset(){
 		firstRun=true;
 		errorSum=0;
+		return this;
 	}
 
 	/**
@@ -384,8 +444,9 @@ public class MiniPID{
      * 
 	 * @param rate, with units being the same as the output
 	 */
-	public void setOutputRampRate(double rate){
+	public MiniPID setOutputRampRate(double rate){
 		outputRampRate=rate;
+		return this;
 	}
 
 	/** 
@@ -395,8 +456,38 @@ public class MiniPID{
 	 * during large setpoint adjustments. Increases lag and I term if range is too small.
 	 * @param range, with units being the same as the expected sensor range. 
 	 */
-	public void setSetpointRange(double range){
+	public MiniPID setSetpointRange(double range){
 		setpointRange=range;
+		return this;
+	}
+	
+	/**
+	 * Tell the controller that min and max represent the same same physical value.
+	 * <br>
+	 * This is notably useful for position control of angular values. In many such systems, 
+	 * 0 and 360 represent the same heading, but without special handling you'll often
+	 * correct the error going in an inefficient direction.
+	 * <br>
+	 * Note, that restricting setpoints or sensor inputs to the specified range are not
+	 * required. The controller wraps all values back within this range automatically.
+	 * 
+	 * @param minSensorValue Lower bound of the continuous range
+	 * @param maxSensorValue Lower bound of the continuous range
+	 */
+	public MiniPID setContinuousMode(double minSensorValue, double maxSensorValue){
+		this.continuousMin = minSensorValue;
+		this.continuousMax = maxSensorValue;
+		return this;
+	}
+
+	/**
+	 * Disable the continous mode, and resume normal operation.
+	 *  
+	 */
+	public MiniPID setContinousModeOff(){
+		this.continuousMin=0;
+		this.continuousMax=0;
+		return this;
 	}
 
 	/**
@@ -410,11 +501,13 @@ public class MiniPID{
 	 * <pre>output*(1-strength)*sum(0..n){output*strength^n}</pre> algorithm.
 	 * @param output valid between [0..1), meaning [current output only.. historical output only)
 	 */
-	public void setOutputFilter(double strength){
+	public MiniPID setOutputFilter(double strength){
 		if(strength==0 || bounded(strength,0,1)){
 		outputFilter=strength;
 		}
+		return this;
 	}
+
 
 	//**************************************
 	// Helper functions
