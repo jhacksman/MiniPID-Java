@@ -24,7 +24,6 @@ public class MiniPID{
 	private double P=0;
 	private double I=0;
 	private double D=0;
-	private double F=0;
 
 	private double maxIOutput=0;
 	private double maxError=0;
@@ -75,19 +74,6 @@ public class MiniPID{
 		checkSigns();
 		}
 
-	/**
-	 * Create a MiniPID class object. 
-	 * See setP, setI, setD, setF methods for more detailed parameters.
-	 * @param p Proportional gain. Large if large difference between setpoint and target. 
-	 * @param i Integral gain.  Becomes large if setpoint cannot reach target quickly. 
-	 * @param d Derivative gain. Responds quickly to large changes in error. Small values prevents P and I terms from causing overshoot.
-	 * @param f Feed-forward gain. Open loop "best guess" for the output should be. Only useful if setpoint represents a rate.
-	 */
-	public MiniPID(double p, double i, double d, double f){
-		P=p; I=i; D=d; F=f;
-		checkSigns();
-		}
-
 	//**********************************
 	// Configuration functions
 	//**********************************
@@ -99,7 +85,7 @@ public class MiniPID{
 	 * For position based controllers, this is the first parameter to tune, with I second. <br>
 	 * For rate controlled systems, this is often the second after F.
 	 *  
-	 * @param p Proportional gain. Affects output according to <b>output+=P*(setpoint-current_value)</b>
+	 * @param p Proportional gain. Affects output according to <code>output+=P*(setpoint-current_value)</code>
 	 */
 	public MiniPID setP(double p){
 		P=p;
@@ -110,9 +96,10 @@ public class MiniPID{
 	/**
 	 * Changes the I parameter <br>
 	 * This is used for overcoming disturbances, and ensuring that the controller always gets to the control mode. 
-	 * Typically tuned second for "Position" based modes, and third for "Rate" or continuous based modes. <br>
-	 * Affects output through <b>output+=previous_errors*Igain ;previous_errors+=current_error</b>
-	 * 
+	 * Typically tuned second for "Position" based modes, and third for "Rate" or continuous based modes.
+	 * </p><p>
+	 * Affects output through <code>output+=previous_errors*Igain ;previous_errors+=current_error</code>
+	 * </p><p>
 	 * @see {@link #setMaxIOutput(double) setMaxIOutput} for how to restrict
 	 *
 	 * @param i New gain value for the Integral term
@@ -134,18 +121,23 @@ public class MiniPID{
 	}
 
 	/**
-	 * Changes the D parameter <br>
-	 * This has two primary effects:
+	 * Changes the D parameter
+	 * <p>
+	 * This term tends to oppose motion, with the following effects
 	 * <list>
-	 * <li> Adds a "startup kick" and speeds up system response during setpoint changes
-	 * <li> Adds "drag" and slows the system when moving toward the target
+	 * <li> When the system is moving toward the target, it provides a negative response, slowing the system and adding drag. 
+	 * <li> When the system is at/near the setpoint and disturbed away from it, it provides a sharp, strong response to oppose it.
+	 * <li> Adds a "startup kick" on setpoint changes.
 	 * </list>
-	 * A small D value can be useful for both improving response times, and preventing overshoot.
-	 * However, in many systems a large D value will cause significant instability, particularly 
-	 * for large setpoint changes.
-	 * <br>
-	 * Affects output through <b>output += -D*(current_input_value - last_input_value)</b>
-	 *
+	 * </p><p>
+	 * This tends to be a tricky term to tune; The correct D term provides stability and prevents overshoot. 
+	 * However, if it's too big, you'll add significant instability to the system. 
+	 * </p><p>
+	 * Works most reliably when using input ramp rates and feed forwards, 
+	 * so that setpoint changes between cycles are generally small, and the only large errors are disturbances.
+	 * </p><p>
+	 * Affects output through <code>output += -D*(current_input_value - last_input_value)</code>
+	 * </p>
 	 * @param d New gain value for the Derivative term
 	 */
 	public MiniPID setD(double d){
@@ -155,30 +147,77 @@ public class MiniPID{
 	}
 
 	/**
-	 * Configure the FeedForward parameter. <br>
-	 * This is excellent for velocity, rate, and other  continuous control modes where you can 
-	 * expect a rough output value based solely on the setpoint.<br>
-	 * Should not be used in "position" based control modes.<br>
-	 * Affects output according to <b>output+=F*Setpoint</b>. Note, that a F-only system is actually open loop.
-	 * 
-	 * @param f Feed forward gain. 
+	 * Configure a simplified Velocity FeedForward
+	 * <p>
+	 * kS output according to <code>output+= (sign of error) * ks</code>.
+	 * This value is determined by the smallest output that causes rotation. Can be set to 0 to ignore
+	 * </p><p>
+	 * kF output according to <code>output+=F*Setpoint</code> . 
+	 * Because of this, a sensible default value is <code>maxOutput/maxAchievableVelocity</code>. 
+	 * </p>
+	 * @param ks Static feed forward output. 
+	 * @param f Feed forward velocity gain. 
 	 */
-	public MiniPID setF(double f){
-		F=f;
-		checkSigns();
+	public MiniPID setFVelocity(double ks, double kv){
+		setF((s,a,e)-> Math.signum(e)*ks + s*v);
 		return this;
 	}
 
 	/**
+	 * Configure a simplified Gravity FeedForward
+	 * <p>
+	 * kS output according to <code>output+= (sign of error) * ks</code>.
+	 * This value is determined by the smallest output that causes motion. Can be set to 0 to ignore
+	 * </p><p>
+	 * kg Affects output according to <code>output+=kg</code> . 
+	 * This is simply the output applied to keep a system from falling down.
+	 * </p>
+	 * @param ks Static Feed Forward. 
+	 * @param kg gravity feed forward
+	 */
+	public MiniPID setFGravity(double ks, double kg){
+		setF((s,a,e)-> Math.signum(e)*ks + kg );
+		return this;
+	}
+
+	/** Helper unit for defining feed forward angles */
+	public enum AngularUnits{kRad,kDegrees}
+
+	/**
+	 * Configure a Gravity Feed Forward for pivot and arm systems 
+	 * <p>
+	 * kS output according to <code>output+= (sign of error) * ks</code>.
+	 * This value is determined by the smallest output that causes motion. Can be set to 0 to ignore
+	 * </p><p>
+	 * kCos Affects output according to <code>output+=kcos*cos(current angle)</code> . 
+	 * This negates the effect of gravity on the arm at all points in motion
+	 * </p>
+	 * @param ks Static Feed Forward. 
+	 * @param kcos gravity feed forward
+	 * @param units Units used for the calculation
+	 * @param offset Offset between measured angle and the system's center of gravity
+	 */
+	public MiniPID setFArm(double ks, double kcos, AngularUnits units, double offset ){
+		switch (units) {
+			case kRad:
+				setF((s,a,e)-> Math.signum(e)*ks + kcos*Math.cos(a + offset) );
+				break;
+			case kDegrees:
+				setF((s,a,e)-> Math.signum(e)*ks + kcos*Math.cos(Math.toRadians(kcos + offset)) );
+				break;
+			}
+		}
+		return this;
+	}
+
+	/**
+	 * </p>
 	 * Configure the FeedForward parameter using arbitrary function and system parameters <br>
 	 * This allows for precise modelling of the expected beaviour of your system,
 	 * allowing effective PID use on a wider variety of systems.
-	 * <br>
-	 * Examples:
-	 * <li> For a position system that lifts elevator, the lambda would return a constant value, which 
-	 * represents the motor power necessary to counteract gravity. 
-	 * <li> For a positional system controlling a vertically rotating arm, kPowerAtFullExtension*sin(angle) operation
-	 * to counteract gravity
+	 * </p><p>
+	 * Before using this, consider if the existing setF functions cover your use case. 
+	 * </p>
 	 * @param ff Feed forward lambda, which would take (Setpoint, Sensor Actual, error) and return double
 	 * @return
 	 */
@@ -196,23 +235,6 @@ public class MiniPID{
 	 */
 	public MiniPID setPID(double p, double i, double d){
 		P=p;D=d;
-		//Note: the I term has additional calculations, so we need to use it's 
-		//specific method for setting it.
-		setI(i);
-		checkSigns();
-		return this;
-	}
-
-	/** 
-	 * Configure the PID object.
-	 * See setP, setI, setD, setF methods for more detailed parameters.
-	 * @param p Proportional gain. Large if large difference between setpoint and target. 
-	 * @param i Integral gain.  Becomes large if setpoint cannot reach target quickly. 
-	 * @param d Derivative gain. Responds quickly to large changes in error. Small values prevents P and I terms from causing overshoot.
-	 * @param f Feed-forward gain. Open loop "best guess" for the output should be. Only useful if setpoint represents a rate.
-	 */
-	public MiniPID setPID(double p, double i, double d,double f){
-		P=p;D=d;F=f;
 		//Note: the I term has additional calculations, so we need to use it's 
 		//specific method for setting it.
 		setI(i);
@@ -239,7 +261,7 @@ public class MiniPID{
 	/**
 	 * Specify a maximum output range. <br>
 	 * When one input is specified, output range is configured to 
-	 * <b>[-output, output]</b>
+	 * <code>[-output, output]</code>
 	 * @param output
 	 */
 	public MiniPID setOutputLimits(double output){
@@ -250,7 +272,7 @@ public class MiniPID{
 	/**
 	 * Specify a  maximum output.
 	 * When two inputs specified, output range is configured to 
-	 * <b>[minimum, maximum]</b>
+	 * <code>[minimum, maximum]</code>
 	 * @param minimum possible output value
 	 * @param maximum possible output value
 	 */
@@ -323,10 +345,8 @@ public class MiniPID{
 			error = constrain(error,-setpointRange,setpointRange);
 		}
 
-		// Calculate F output. Notice, this depends only on the setpoint, and not the error. 
-		Foutput=F*setpoint;
-		// Handle user-provided functions to model things we can't handle well 
-		Foutput += feedForwardLambda.compute(setpoint, actual, error);
+		// Handle the feed forward, which provides an expected output for most systems
+		Foutput = feedForwardLambda.compute(setpoint, actual, error);
 
 		// Calculate P term
 		Poutput=P*error;   
@@ -341,8 +361,10 @@ public class MiniPID{
 		}
 
 		// Calculate D Term
-		// Note, this is negative. This actually "slows" the system if it's doing
-		// the correct thing, and small values helps prevent output spikes and overshoot 
+		// This term tends to oppose motion, acting on the current rate of change.
+		// When the other terms are pushing the system to the setpoint, it acts as drag, preventing overshoot.
+		// When the system is at setpoint and bumped, the D response will provide a sharp opposing force,
+		// providing setability to keep it at the setpoint.
 		Doutput= -D*(actual-lastActual);
 		lastActual=actual;
 
@@ -506,6 +528,54 @@ public class MiniPID{
 		outputFilter=strength;
 		}
 		return this;
+	}
+
+
+	//**************************************
+	// Alternate closed loops for special cases
+	//**************************************
+
+	/**
+	 * Configure a Bang-Bang output, returning the min or max output to correct the error. Replaces FeedForward functions.
+	 * <p>
+	 * This is useful for systems that only have on/off states, and respond slowly to changes.
+	 * A common example is relay-controlled heaters and other thermostat systems.
+	 * </p><p>
+	 * Hysterisis allows you to define an error tolerance in which the output remains unchanged. 
+	 * This helps prevent the system from switching too rapidly, which is often harmful to the systems involved.
+	 * A large hysteris will cause overshoot, but too small will result in excess switching. 
+	 * </p><p>
+	 * When used, PID values are irrelivant, and recommended to be left at zero. 
+	 * </p>
+	 * @param hysterisis error in 
+	*/
+	public MiniPID setControlModeBangBang(double hysterisis){
+		double output = minOutput;
+		setF((s,a,e) -> {
+			if(e > hysterisis) output = maxOutput;
+			if(e < hysterisis) output = minOutput;
+			return output;
+		});
+	}
+
+	/**
+	 * Configure a spring control output, replacing the FeedForward functions. 
+	 * <p>
+	 * This can generates fairly well behaved output when handling large, 
+	 * unconstrained setpoint changes or disturbances. 
+	 * However, it will tend to oscillate around the setpoint. 
+	 * </p><p>
+	 * Most useful for tracking a continously moving setpoint where disturbances might cause unexpected.
+	 * </p><p> 
+	 * Recommended to use SetOutputRampRate() or an output filter to reduce oscillation at the setpoint.
+	 * </p><p>
+	 * When used, PID values will affect output normally, but I term is the most helpful to reduce potential standing errors.
+	 * </p>
+	*/
+	public MiniPID setControlModeSpring(){
+		setF((s,a,e) -> {
+			return Math.sqrt(Math.abs(e)) * Math.signum(e);
+		});
 	}
 
 
