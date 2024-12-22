@@ -57,7 +57,18 @@ public class MiniPID{
 	}
 	private FeedForwardLambda feedForwardLambda = (s,a,e)->{return 0.0;};
 
-
+	/**
+	 * Interface to define a logger function, so that you can validate certain internal 
+	 * functions inside the PID. This is called after modifications the PID made to the 
+	 * internal variables
+	 */
+	public interface PIDLogger{
+		public void run(setpoint, actual, error, output,
+		foutput,poutput,ioutput,doutput, errorSum);
+	}
+	/** Logger object; By default, it's unintialized to indicate logging is disabled */
+	private PIDLogger logger = null;
+	
 	//**********************************
 	// Constructor functions
 	//**********************************
@@ -125,9 +136,9 @@ public class MiniPID{
 	 * <p>
 	 * This term tends to oppose motion, with the following effects
 	 * <list>
-	 * <li> When the system is moving toward the target, it provides a negative response, slowing the system and adding drag. 
-	 * <li> When the system is at/near the setpoint and disturbed away from it, it provides a sharp, strong response to oppose it.
-	 * <li> Adds a "startup kick" on setpoint changes.
+	 * <li>- When the system is moving toward the target, it provides a negative response, slowing the system and adding drag. 
+	 * <li>- When the system is at/near the setpoint and disturbed away from it, it provides a sharp, strong response to oppose it.
+	 * <li>- Adds a "startup kick" on setpoint changes.
 	 * </list>
 	 * </p><p>
 	 * This tends to be a tricky term to tune; The correct D term provides stability and prevents overshoot. 
@@ -206,7 +217,6 @@ public class MiniPID{
 				setF((s,a,e)-> Math.signum(e)*ks + kcos*Math.cos(Math.toRadians(kcos + offset)) );
 				break;
 			}
-		}
 		return this;
 	}
 
@@ -325,15 +335,16 @@ public class MiniPID{
 		double Ioutput;
 		double Doutput;
 		double Foutput;
-		double continuousHalfRange;
 
 		this.setpoint=setpoint;
 
 		// Do the simple parts of the calculations
 		double error=setpoint-actual;
 
-		// If we're in continous mode, wrap our error to better match the system
+		// If we're in continous mode, wrap our error to better match the system,
+		// and adjust the error sign to push us in the appropriate direction
 		if(continuousMin != continuousMax){
+			double continuousHalfRange;
 			continuousHalfRange = (continuousMax-continuousMin)/2.0;
 			error %= (continuousHalfRange*2);
 			if(error>continuousHalfRange) error-=2*continuousHalfRange;
@@ -364,7 +375,7 @@ public class MiniPID{
 		// This term tends to oppose motion, acting on the current rate of change.
 		// When the other terms are pushing the system to the setpoint, it acts as drag, preventing overshoot.
 		// When the system is at setpoint and bumped, the D response will provide a sharp opposing force,
-		// providing setability to keep it at the setpoint.
+		// providing stability to keep it at the setpoint.
 		Doutput= -D*(actual-lastActual);
 		lastActual=actual;
 
@@ -372,33 +383,37 @@ public class MiniPID{
 		// 1. maxIoutput restricts the amount of output contributed by the Iterm.
 		// 2. prevent windup by not increasing errorSum if we're already running against our max Ioutput
 		// 3. prevent windup by not increasing errorSum if output is output=maxOutput    
+		if(minOutput!=maxOutput && !bounded(output, minOutput,maxOutput) ){
+			// Our system is at maximum output, so additional error sum will not improve 
+			// response, but will increase overshoot.
+			// In this case, simply avoid adding the error sum.
+		}
+		else if(outputRampRate!=0 && !bounded(output, lastOutput-outputRampRate,lastOutput+outputRampRate) ){
+			// As before; Our system's output ramp is constraining ouptut, so
+			// as before, increasing error causes overshoot, but not improved immediate response.
+		}
+		else if(maxIOutput!=0){
+			// This will be the typical case for most systems when I term is doing work. 
+			// We keep the error sum within our defined limits to prevent I term from 
+			// hitting unreasonable output.
+			// These limits are set explicitly by setMaxIOutput() or implicity by setOutputLimits()
+			errorSum=constrain(errorSum+error,-maxError,maxError);
+		}
+		else{
+			// Suboptimal, and we don't want to be here. In this case, immovable objects
+			// halting the system will cause massive I term windup, preventing corrective setpoint
+			// changes.
+			errorSum+=error;
+		}
+
+		//With errorSum figured out, we can now generate our I term response
 		Ioutput=I*errorSum;
 		if(maxIOutput!=0){
 			Ioutput=constrain(Ioutput,-maxIOutput,maxIOutput); 
-		}    
+		}
 
 		// And, finally, we can just add the terms up
 		output=Foutput + Poutput + Ioutput + Doutput;
-
-		// Figure out what we're doing with the error.
-		if(minOutput!=maxOutput && !bounded(output, minOutput,maxOutput) ){
-			errorSum=error; 
-			// reset the error sum to a sane level
-			// Setting to current error ensures a smooth transition when the P term 
-			// decreases enough for the I term to start acting upon the controller
-			// From that point the I term will build up as would be expected
-		}
-		else if(outputRampRate!=0 && !bounded(output, lastOutput-outputRampRate,lastOutput+outputRampRate) ){
-			errorSum=error; 
-		}
-		else if(maxIOutput!=0){
-			errorSum=constrain(errorSum+error,-maxError,maxError);
-			// In addition to output limiting directly, we also want to prevent I term 
-			// buildup, so restrict the error directly
-		}
-		else{
-			errorSum+=error;
-		}
 
 		// Restrict output to our specified output and ramp limits
 		if(outputRampRate!=0){
@@ -411,10 +426,13 @@ public class MiniPID{
 			output=lastOutput*outputFilter+output*(1-outputFilter);
 		}
 
-		// Get a test printline with lots of details about the internal 
-		// calculations. This can be useful for debugging. 
-		// System.out.printf("Final output %5.2f [ %5.2f, %5.2f , %5.2f  ], eSum %.2f\n",output,Poutput, Ioutput, Doutput,errorSum );
-		// System.out.printf("%5.2f\t%5.2f\t%5.2f\t%5.2f\n",output,Poutput, Ioutput, Doutput );
+		// Run a logger, if enabled.
+		if(logger!=null){
+			logger.run(setpoint, actual, error, output,
+				Foutput,Poutput,Ioutput,Doutput,
+				errorSum
+			);
+		}
 
 		lastOutput=output;
 		return output;
@@ -578,6 +596,33 @@ public class MiniPID{
 		});
 	}
 
+	//**************************************
+	// Logging oriented functions
+	//**************************************
+
+	/** Enables logging with a simple CSV oriented output.
+	 * This might be directly helpful for simple checking, 
+	 * or put into a spreadsheet for detailed graphical analysis.
+	 */
+	public void enableLoggerCSV(){
+		logger = (setpoint, actual, error, output, foutput,poutput,ioutput,doutput, errorSum) -> 
+		System.out.printf("%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+			setpoint, actual, error, output,
+			foutput,poutput,ioutput,doutput,errorSum
+		);
+	}
+
+	/**
+	 * Directly input a logger function for exporting to a different output stream or file.
+	 * @param logger
+	 */
+	public void enableLogger(PIDLogger logger){
+		this.logger = logger;
+	}
+
+	public void disableLogger(){
+		this.logger = null; //unset the logger
+	}
 
 	//**************************************
 	// Helper functions
