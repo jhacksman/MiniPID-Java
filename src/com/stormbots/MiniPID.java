@@ -1,20 +1,39 @@
-package com.stormbots.closedloop;
+package io.github.tekdemo;
 
 import java.util.function.DoubleSupplier;
 
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
-
 /**
- * Small, easy to use PID implementation with advanced controller
- * capability.<br>
- * Minimal usage:<br>
- * MiniPID pid = new MiniPID(p,i,d); <br>
- * ...looping code...{ <br>
- * output= pid.getOutput(sensorvalue,target); <br>
- * }
- * 
+ * <p>
+ * Simple to use PID implementation with extra features to make getting good closed loop control easy.
+ * </p><p>
+ * Source code documented to serve as a learning resource.
+ * </p><p>
+ * Minimal usage:
+ * <pre>
+MiniPID pid = new MiniPID(p,i,d);
+//get sensor values
+output= pid.getOutput(sensorvalue,target);
+//use output values
+</pre>
+ * </p><p>
+ * Recommended usage: 
+ * <pre>
+MiniPID pid = new MiniPID(p,i,d)
+  // Define the systems reasonable output constraints
+  .setOutputLimits(min,max)
+  // Define the typical operating range for setpoint changes, which simplifies tuning
+  .setSetpointRange(range)
+  // Define a feedforward model for your system; Greatly simplifies tuning and improves performance
+  .setF...(...)
+  ; 
+//get sensor values
+output= pid.getOutput(sensorvalue,target);
+//use output values
+</pre>
+ * </p><p>
  * @see https://github.com/tekdemo/MiniPID-Java
  * @see http://brettbeauregard.com/blog/2011/04/improving-the-beginners-pid-direction/improving-the-beginners-pid-introduction
+ * </p>
  */
 public class MiniPID{
 	//**********************************
@@ -26,8 +45,8 @@ public class MiniPID{
 	private double D=0;
 
 	private double maxIOutput=0;
-	private double maxError=0;
 	private double errorSum=0;
+	private double maxErrorSum=0;
 
 	private double maxOutput=0; 
 	private double minOutput=0;
@@ -116,11 +135,9 @@ public class MiniPID{
 	 * @param i New gain value for the Integral term
 	 */
 	public MiniPID setI(double i){
-		if(I!=0){
+		if(i!=0){
 			errorSum=errorSum*I/i;
-			}
-		if(maxIOutput!=0){
-			maxError=maxIOutput/i;
+			maxErrorSum=maxIOutput/i;
 		}
 		I=i;
 		checkSigns();
@@ -258,12 +275,12 @@ public class MiniPID{
 	 * @param maximum. Units are the same as the expected output value
 	 */
 	public MiniPID setMaxIOutput(double maximum){
-		// Internally maxError and Izone are similar, but scaled for different purposes. 
-		// The maxError is generated for simplifying math, since calculations against 
+		// Internally maxErrorSum and Izone are similar, but scaled for different purposes. 
+		// The maxErrorSum is generated for simplifying math, since calculations against 
 		// the max error are far more common than changing the I term or Izone. 
 		maxIOutput=maximum;
 		if(I!=0){
-			maxError=maxIOutput/I;
+			maxErrorSum=maxIOutput/I;
 		}
 		return this;
 	}
@@ -373,16 +390,24 @@ public class MiniPID{
 
 		// Calculate D Term
 		// This term tends to oppose motion, acting on the current rate of change.
-		// When the other terms are pushing the system to the setpoint, it acts as drag, preventing overshoot.
-		// When the system is at setpoint and bumped, the D response will provide a sharp opposing force,
-		// providing stability to keep it at the setpoint.
+		// When the other terms are pushing the system toward the setpoint, it acts as drag, preventing overshoot.
+		// When the system is at setpoint and disturbed away from it, the D response will provide a 
+		// sharp opposing force, providing stability to keep it at the setpoint.
+		// Note that the standard form would look like this;
+		//   Doutput = -D*(error-lasterror) ;
+		// or 
+		//   Doutput = D*((setpoint-sensor) - (lastsetpoint-lastsensor))
+		// and can be rearranged to 
+		//   Doutput = D*( (setpoint-lastsetpoint) + (lastsensor-sensor))
+		// In most moments of operation, setpoint=lastsetpoint, reducing that term to zero. 
+		// However, during setpoint changes, that term can be large, causing a large output spike
+		// known as "derivitive kick", which is undesirable.
+		// Instead, we use "derivitive on measurement" form, which simply sets the setpoint terms to 0,
+		// removing this undesirable kick, while preserving the intended effects.
 		Doutput= -D*(actual-lastActual);
 		lastActual=actual;
 
-		// The Iterm is more complex. There's several things to factor in to make it easier to deal with.
-		// 1. maxIoutput restricts the amount of output contributed by the Iterm.
-		// 2. prevent windup by not increasing errorSum if we're already running against our max Ioutput
-		// 3. prevent windup by not increasing errorSum if output is output=maxOutput    
+		// The Iterm has a few conditions to ensure it's computed in sensible ways.
 		if(minOutput!=maxOutput && !bounded(output, minOutput,maxOutput) ){
 			// Our system is at maximum output, so additional error sum will not improve 
 			// response, but will increase overshoot.
@@ -397,7 +422,7 @@ public class MiniPID{
 			// We keep the error sum within our defined limits to prevent I term from 
 			// hitting unreasonable output.
 			// These limits are set explicitly by setMaxIOutput() or implicity by setOutputLimits()
-			errorSum=constrain(errorSum+error,-maxError,maxError);
+			errorSum=constrain(errorSum+error,-maxErrorSum,maxErrorSum);
 		}
 		else{
 			// Suboptimal, and we don't want to be here. In this case, immovable objects
@@ -454,7 +479,6 @@ public class MiniPID{
 	 * In one parameter mode, the last configured setpoint will be used.<br>
 	 * @see MiniPID#setSetpoint()
 	 * @param actual The monitored value, typically as a sensor input.
-	 * @param setpoint The target value for the system
 	 * @return calculated output value for driving the system
 	 */
 	public double getOutput(double actual){
@@ -565,7 +589,7 @@ public class MiniPID{
 	 * </p><p>
 	 * When used, PID values are irrelivant, and recommended to be left at zero. 
 	 * </p>
-	 * @param hysterisis error in 
+	 * @param hysterisis required change of error between state switches 
 	*/
 	public MiniPID setControlModeBangBang(double hysterisis){
 		double output = minOutput;
@@ -577,22 +601,52 @@ public class MiniPID{
 	}
 
 	/**
-	 * Configure a spring control output, replacing the FeedForward functions. 
+	 * A simple tri state (on/off/reverse) control
+	 * @param tolerance
+	 * @return
+	 */
+	public MiniPID setControlModeTriState(double tolerance){
+		setF((s,a,e) -> {
+			if(e > tolerance) output = maxOutput;
+			if(e < tolerance) output = minOutput;
+			return maxOutput-minOutput;
+		});
+	}
+
+	/**
+	 * Configure an inverse-spring output, replacing the FeedForward functions. 
 	 * <p>
-	 * This can generates fairly well behaved output when handling large, 
-	 * unconstrained setpoint changes or disturbances. 
-	 * However, it will tend to oscillate around the setpoint. 
+	 * This responds strongly to small errors, but increasingly weakly as the error increases.
+	 * This can generate fairly well behaved output when handling large, unconstrained setpoint
+	 * changes or disturbances. However, it's more prone to oscillation around setpoints than a P term.
 	 * </p><p>
-	 * Most useful for tracking a continously moving setpoint where disturbances might cause unexpected.
+	 * Most useful for tracking a continously moving setpoint where errors might be large.
 	 * </p><p> 
 	 * Recommended to use SetOutputRampRate() or an output filter to reduce oscillation at the setpoint.
 	 * </p><p>
 	 * When used, PID values will affect output normally, but I term is the most helpful to reduce potential standing errors.
 	 * </p>
+	 * @param gain spring constant k
 	*/
-	public MiniPID setControlModeSpring(){
+	public MiniPID setControlModeInverseSpring(double gain){
 		setF((s,a,e) -> {
-			return Math.sqrt(Math.abs(e)) * Math.signum(e);
+			return gain * Math.sqrt(Math.abs(e)) * Math.signum(e);
+		});
+	}
+
+	/** 
+	 * <p>
+	 * Configure a spring control system.
+ 	 * </p><p>
+	 * Bouncy, uncontrolled motion. Recommended for systems under constant, rapid 
+	 * setpoint changes or disturbances, where the goal is fun rather than actual control.
+ 	 * </p><p>
+	 * Mostly here for demonstration purposes.
+	 * </p>
+	 */
+	public MiniPID setControlModeSpring(double gain){
+		setF((s,a,e) -> {
+			return gain * e * Math.abs(e);
 		});
 	}
 
