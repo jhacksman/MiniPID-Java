@@ -2,6 +2,10 @@ package io.github.tekdemo;
 
 import java.util.function.DoubleSupplier;
 
+import com.stormbots.MiniPID.AngularUnits;
+import com.stormbots.MiniPID.FeedForwardLambda;
+import com.stormbots.MiniPID.PIDLogger;
+
 /**
  * <p>
  * Simple to use PID implementation with extra features to make getting good closed loop control easy.
@@ -56,7 +60,8 @@ public class MiniPID{
 	private double lastActual=0;
 
 	private boolean firstRun=true;
-	private boolean reversed=false;
+	private boolean outputInverted=false;
+	private int sensorPhase=1;
 
 	private double outputRampRate=0;
 	private double lastOutput=0;
@@ -101,7 +106,6 @@ public class MiniPID{
 	 */
 	public MiniPID(double p, double i, double d){
 		P=p; I=i; D=d;
-		checkSigns();
 		}
 
 	//**********************************
@@ -119,7 +123,6 @@ public class MiniPID{
 	 */
 	public MiniPID setP(double p){
 		P=p;
-		checkSigns();
 		return this;
 	}
 
@@ -140,7 +143,6 @@ public class MiniPID{
 			maxErrorSum=maxIOutput/i;
 		}
 		I=i;
-		checkSigns();
 		 // Implementation note: 
 		 // This Scales the accumulated error to avoid output errors. 
 		 // As an example doubling the I term cuts the accumulated error in half, which results in the 
@@ -170,7 +172,6 @@ public class MiniPID{
 	 */
 	public MiniPID setD(double d){
 		D=d;
-		checkSigns();
 		return this;
 	}
 
@@ -188,6 +189,19 @@ public class MiniPID{
 	 */
 	public MiniPID setFVelocity(double ks, double kv){
 		setF((s,a,e)-> Math.signum(e)*ks + s*v);
+		return this;
+	}
+
+	/**
+	 * Configure a minimal Static feedforward, applicable to almost all systems
+	 * <p>
+	 * kS output according to <code>output+= (sign of error) * ks</code>.
+	 * This value is determined by the smallest output that causes rotation. Can be set to 0 to ignore
+	 * </p>
+	 * @param ks Static feed forward output. 
+	 */
+	public MiniPID setFStatic(double ks){
+		setF((s,a,e)-> Math.signum(e)*ks);
 		return this;
 	}
 
@@ -265,7 +279,6 @@ public class MiniPID{
 		//Note: the I term has additional calculations, so we need to use it's 
 		//specific method for setting it.
 		setI(i);
-		checkSigns();
 		return this;
 	}
 
@@ -282,17 +295,6 @@ public class MiniPID{
 		if(I!=0){
 			maxErrorSum=maxIOutput/I;
 		}
-		return this;
-	}
-
-	/**
-	 * Specify a maximum output range. <br>
-	 * When one input is specified, output range is configured to 
-	 * <code>[-output, output]</code>
-	 * @param output
-	 */
-	public MiniPID setOutputLimits(double output){
-		setOutputLimits(-output,output);
 		return this;
 	}
 
@@ -315,12 +317,31 @@ public class MiniPID{
 		return this;
 	}
 
-	/** 
-	 * Set the operating direction of the PID controller
-	 * @param reversed Set true to reverse PID output
+
+	/**<p>
+	 * Allows you to invert the error signal before feeding it into the PID controller.
+	 * This helps resolve issues on simple PIDs where a positive motor output corresponds to
+	 * a negative change in sensor output (or, the sensor and output are "out of phase")
+	 * FeedForwards should respond mostly the same, as they are open loop systems.
+	 * </p>
+	 * @param inPhase default is true (in phase)
+	 * @return
+	 */
+	public MiniPID setSensorPhase(boolean inPhase){
+		this.sensorPhase = inPhase ? 1 : -1;
+		return this;
+	}
+
+	/** <p>
+	 * Reverse the output of the system. Useful in various systems where the system action
+	 * (such as a motor output) has the opposite logical effect
+	 * </p><p>
+	 * A good example is a negative output making an arm go upward.
+	 * </p>
+	 * @param reversed Set true to reverse PID output (default false_
 	 */
 	public MiniPID setDirection(boolean reversed){
-		this.reversed=reversed;
+		this.outputInverted = reversed;
 		return this;
 	}
 
@@ -357,6 +378,8 @@ public class MiniPID{
 
 		// Do the simple parts of the calculations
 		double error=setpoint-actual;
+		error *= sensorPhase; //Handle the sensor response not matching the motor response
+
 
 		// If we're in continous mode, wrap our error to better match the system,
 		// and adjust the error sign to push us in the appropriate direction
@@ -450,6 +473,9 @@ public class MiniPID{
 		if(outputFilter!=0){
 			output=lastOutput*outputFilter+output*(1-outputFilter);
 		}
+
+		// Handle inverted outputs
+		output = outputInverted ? maxOutput+minOutput-output : output ;
 
 		// Run a logger, if enabled.
 		if(logger!=null){
@@ -708,24 +734,5 @@ public class MiniPID{
 		// This is more helpful for determining edge-case behaviour
 		// than <= is.
 		return (min<value) && (value<max);
-	}
-
-	/**
-	 * To operate correctly, all PID parameters require the same sign
-	 * This should align with the {@literal}reversed value
-	 */
-	private void checkSigns(){
-		if(reversed){  // all values should be below zero
-			if(P>0) P*=-1;
-			if(I>0) I*=-1;
-			if(D>0) D*=-1;
-			if(F>0) F*=-1;
-		}
-		else{  // all values should be above zero
-			if(P<0) P*=-1;
-			if(I<0) I*=-1;
-			if(D<0) D*=-1;
-			if(F<0) F*=-1;
-		}
 	}
 }
