@@ -6,7 +6,7 @@ This is a small, fully self contained PID class designed to help provide simple,
 - Provide all expected features of a quality PID loop. 
 - Allow for stability without extensive tuning. 
 - Be simple to integrate into projects without code restructuring
-- Be easy to "chain", sending the output of one PID to the input of another. 
+- Be easy to "cascade", sending the output of one PID to the input of another. 
 - Be flexible enough that any provided functions can be used in isolation. 
 - Be simple enough to be used in "transient" or one-off control sequences 
 
@@ -14,8 +14,8 @@ This is a small, fully self contained PID class designed to help provide simple,
 ##### PID Functions
 True to the name, the main purpose of this class is PID control.
 
-##### Feed Forward rate setting. 
-Provides an "Expected output", helpful when doing velocity control systems. 
+##### Feed Forward configuaration 
+Provides a predicted output, improving responsiveness, accuracy, and while decreasing the initial error the PID acts upon.
 
 ##### Setpoint Range
 Force the PID system to cap the setpoint to a range near the current input values. This allows you to tune the PID in a smaller range, and have it perform sanely during large setpoint changes. 
@@ -70,38 +70,55 @@ This library is designed to produce "decent" PID results with minimal effort and
 Note, PID systems work best when the calculations are performed at constant time intervals. This PID implimentation does not handle this, and assumes the primary loop or framework handles the precise timing details.
 
 #### `MiniPID(p,i,d)`
-#### `MiniPID(p,i,d,f)`
 
-These create the basic PID, allowing for further configuration. Generally, you initialize the PID values here, but you can re-configure on the fly using the `setP(double P)`,`setI(double I)`,`setD(double D)`, and `setF(double F)` methods. 
+These create the basic PID object, allowing for further configuration. Generally, you initialize the PID values here, but you can re-configure on the fly using the `setP(double P)`,`setI(double I)`,`setD(double D)`, and `setF(...)` methods. 
 
 Tuning PID systems is out of scope of this readme, but a good examples can be found all over the internet. 
 
-#### `SetF(double F)`
-Feed-Forward is a 4th system variable that is very helpful on systems with a target velocity, or other systems where an on-target system results in continous motion. Feed forward is not helpful on positional control systems, or other systems where being on target results in halted (or small cyclic) motion.
+#### `SetF(...)`
+#### `SetFStatic(...)`
+#### `SetFArm(...)`
+#### `setFGravity(...)`
+#### `SetFVelocity(...)`
+Feed-Forward is a 0th system variable; While not part of the PID's feedback process, a feed forward allows you to provide your control loop with information about what you *expect* to happen for a given setpoint. In an ideal system, a feed-forward generates the majority of the output. 
 
-Conceptually, Feed-forward defines a "best guess" as to what the system output should be for a given setpoint value. Feed forward does not consider what the system is _actually_ doing, and a system driven solely by feed-forward is actually an open-loop system. Mathematically, a feed-forward only system is equivilent to `output=setpoint*F`. 
+A feed forward does not consider what the system is _actually_ doing, and a system driven solely by feed-forward is actually an open-loop system. Considering the difference between the expected result and the actual result is where the PID fits in. When a feedforward is set up right, the PID is left with very little to do, and when there is an error, it's easier to tune for.
 
-In most cases, the F term can be calculated very simply by running an output at full speed, and measuring your sensor rate. The F term is then `max_output_value/max_sensor_rate`.
+A basic set of feed-forwards should be easy to set up, and provide significant benefits in tuning time and performance. This library provides these basics. Advanced feed-forwards can provide incredible precision, but often require more extensive calibration and inputs beyond the scope of this library.
 
-For this class of systems, it's helpful to consider the F term the primary variable, and configured first. Using F in this way will result in a shorter time-to-target since you don't wait for error buildup (to aquire the I term). It's also simpler to tune and more stable since you don't have large P and D terms which will cause oscillation. The P, I, and D  values then will then add minor corrections, operating on a much smaller system error. In this setup, P and I will generally correct for non-linearities in the system such as such as drag, inertia, and friction. D is helpful for providing recovery on sudden loading of the system, or quickly switching to a new setpoint.
+Additional information on the feed-forward terms and the physics they're helping handle is can be found here: [FeedForward](./FeedForward.md)
 
 #### `setOutputLimits(double minimum,double maximum)`
 #### `setOutputLimits(double output)`
-Optional, but highly recommended to set. The set the output limits, and ensure the controller behaves when reaching the maximum output capabilities of your physical system. 
+Optional, but highly recommended to set. The set the output limits, and ensure the controller behaves when reaching the maximum output capabilities of your physical system.
 
 #### `setMaxIOutput(double maximum)`
 Sets the maximum output generated by the I term inside the controller. This is independent of the `setMaxOutput` values. This can assist in reducing windup over large setpoint changes or stall conditions. 
 
+#### `setSensorPhase(boolean isInPhase)`
+Allows you to correct "sensor phase" errors, where a motor's positive direction and the sensor's positive direction are opposite eachother. 
+
+When in phase, the PID response will attempt to reduce the the error, as expected. When out of phase, the error causes the system action to increase the error further (which is undesirable).
+
 #### `setDirection(boolean reversed)`
-Reverses the output. Use this if the controller attempts to go the wrong way during operation. 
+Reverses the system output. This doesn't fix any particular issues, but can help when a system's action feels backwards. As an example, if a positive motor output casues an arm to go "down", then this can help make the numbers feel more correct.
 
 #### `reset()`
-Resets the PID controller. This primarily clears the I and D terms clears the previous sensor state, and sets the target setpoint the the current position. 
+Resets the PID controller. This primarily clears the I and D terms, clears the previous sensor state, and sets the target setpoint the the current position.
 
 This is useful if the output system's state may have changed since the last time the PID system output was applied. This is generally the case when the output system is in a manual control mode (such as a joystick), or was disabled and may have been physically moved. 
 
 #### `setOutputRampRate(double rate)`
-Set the maximum rate of change in a single calculation cycle. This is particularly useful for adding "inertial" to the system, preventing jerks during setpoint changes.
+Set the maximum rate of change in a single time cycle. This can be useful to prevent really sharp responses in error conditions, often caused by D terms, large setpoint changes, or incorrectly set gains. Generally should be permissive, such that output is unhindered during expected operation. When set too high, this will destabilize the system and cause significant lag. 
 
 #### `setOutputFilter(double strength)`
 The output filter prevents sharp changes in the output, adding inertia and minimizing the effect of high frequency oscillations. This adds significant stability to systems with poor tunings, but at the cost of slower setpoint changes, disturbance rejection, and increased overshoot.
+
+#### `enableLogger(PIDLogger function)`
+#### `enableLoggerCSV()`
+Tuning PIDs can often be difficult without precise insight into the math. This logger splits out various components used in the calculations, so they can be put into a spreadsheet or other tool for analysis. 
+
+Because there's a wide variety of desirable logging methods, this class defines an interface to permit attaching arbitrary functions to capture the data, rather than trying to define a bunch of methods and pulling in dependencies. 
+
+A basic example is provided, which simply puts CSV data records to the standard output.
+
