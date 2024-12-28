@@ -86,9 +86,9 @@ public class MiniPID{
 	 * functions inside the PID. This is called after modifications the PID made to the 
 	 * internal variables
 	 */
-	public interface PIDLogger{
-		public void run(setpoint, actual, error, output,
-		foutput,poutput,ioutput,doutput, errorSum);
+	public interface PIDLogger {
+		void run(double setpoint, double actual, double error, double output,
+				double foutput, double poutput, double ioutput, double doutput, double errorSum);
 	}
 	/** Logger object; By default, it's unintialized to indicate logging is disabled */
 	private PIDLogger logger = null;
